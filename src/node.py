@@ -79,16 +79,71 @@ class MsgType(str, Enum):
 # ---------------------------------------------------------------------------
 # Cryptographic utilities
 # ---------------------------------------------------------------------------
+KEY_DIR = os.environ.get("KEY_DIR", "/keys")
+
+
 class CryptoManager:
-    """RSA-2048 key pair per node; verify peer public keys."""
+    """
+    RSA-2048 key pair per node — persisted to KEY_DIR so keys survive
+    container restarts and are visible to the host via the bind-mount volume.
+
+    Key files written to KEY_DIR:
+        node_<id>_priv.pem   — private key (PKCS8, no passphrase)
+        node_<id>_pub.pem    — public key  (SubjectPublicKeyInfo)
+    """
 
     def __init__(self, node_id: int):
         self.node_id    = node_id
-        self._priv_key  = rsa.generate_private_key(
+        self._peer_keys: Dict[int, object] = {}
+        self._priv_key, self._pub_key = self._load_or_generate()
+
+    def _load_or_generate(self):
+        os.makedirs(KEY_DIR, exist_ok=True)
+        priv_path = os.path.join(KEY_DIR, f"node_{self.node_id}_priv.pem")
+        pub_path  = os.path.join(KEY_DIR, f"node_{self.node_id}_pub.pem")
+
+        if os.path.exists(priv_path) and os.path.exists(pub_path):
+            # Load existing keys from the shared volume
+            try:
+                with open(priv_path, "rb") as f:
+                    priv = serialization.load_pem_private_key(
+                        f.read(), password=None, backend=default_backend()
+                    )
+                with open(pub_path, "rb") as f:
+                    pub = serialization.load_pem_public_key(
+                        f.read(), backend=default_backend()
+                    )
+                logging.getLogger(f"CryptoManager[{self.node_id}]").info(
+                    "Loaded existing key pair from %s", KEY_DIR
+                )
+                return priv, pub
+            except Exception as e:
+                logging.getLogger(f"CryptoManager[{self.node_id}]").warning(
+                    "Failed to load keys (%s) — regenerating", e
+                )
+
+        # Generate fresh key pair and save to volume
+        priv = rsa.generate_private_key(
             public_exponent=65537, key_size=2048, backend=default_backend()
         )
-        self._pub_key   = self._priv_key.public_key()
-        self._peer_keys: Dict[int, object] = {}
+        pub = priv.public_key()
+
+        with open(priv_path, "wb") as f:
+            f.write(priv.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ))
+        with open(pub_path, "wb") as f:
+            f.write(pub.public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            ))
+
+        logging.getLogger(f"CryptoManager[{self.node_id}]").info(
+            "Generated new key pair → %s", KEY_DIR
+        )
+        return priv, pub
 
     def public_key_pem(self) -> str:
         return self._pub_key.public_bytes(
@@ -293,7 +348,13 @@ class Node:
         try:
             raw = await reader.readline()
             msg = json.loads(raw.decode().strip())
-            await self._dispatch(msg)
+            # STATUS requests get an inline reply on the main port
+            if msg.get("type") == MsgType.STATUS or msg.get("type") == "STATUS":
+                resp = json.dumps(self.status()) + "\n"
+                writer.write(resp.encode())
+                await writer.drain()
+            else:
+                await self._dispatch(msg)
         except Exception as exc:
             self.log.debug("Connection error: %s", exc)
         finally:
@@ -431,9 +492,14 @@ class Node:
         await self._broadcast(announce)
 
     async def _on_heartbeat(self, msg: dict):
+        lid = msg["leader_id"]
+        # Reject heartbeats from nodes not in our peer list (adversary defence)
+        if lid != self.id and lid not in self.peer_ids:
+            self.log.debug("Ignoring heartbeat from unknown/adversary node %d", lid)
+            return
         if self.role != NodeRole.LEADER:
             self.last_heartbeat = time.time()
-            self.leader_id      = msg["leader_id"]
+            self.leader_id      = lid
             self.role           = NodeRole.FOLLOWER
 
     async def _on_election(self, msg: dict):
@@ -448,7 +514,14 @@ class Node:
         self.election_ok_rcvd = True
 
     async def _on_leader_announce(self, msg: dict):
-        self.leader_id            = msg["leader_id"]
+        lid = msg["leader_id"]
+        # Reject fake LEADER_ANNOUNCE from adversary nodes not in our peer list
+        if lid != self.id and lid not in self.peer_ids:
+            self.log.warning(
+                "Ignoring LEADER_ANNOUNCE from unknown/adversary node %d", lid
+            )
+            return
+        self.leader_id            = lid
         self.last_heartbeat       = time.time()
         self.election_in_progress = False
         if self.id != self.leader_id:

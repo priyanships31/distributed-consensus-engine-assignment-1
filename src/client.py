@@ -230,10 +230,10 @@ class LeaderDiscovery:
 
     async def _probe(self, node: NodeAddr) -> Optional[dict]:
         status_msg = {"type": "STATUS", "from": 0}
-        # Status port is the main port + STATUS_PORT_OFFSET (set in node.py)
+        # Query status on main port — node handles STATUS messages directly
         return await _tcp_rpc(
             node.host,
-            node.port + STATUS_PORT_OFFSET,
+            node.port,
             status_msg,
             timeout=LEADER_PROBE_TIMEOUT,
         )

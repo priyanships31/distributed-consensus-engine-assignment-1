@@ -1,5 +1,6 @@
 # =============================================================================
 #  docker-compose.yml
+#  IIT Jodhpur | Fundamentals of Distributed Systems | Assignment-1
 #
 #  Services:  node1-node5 (honest) | node6 (adversary) | client | toxiproxy
 #  Volumes:   consensus-data (/data)  consensus-keys (/keys)
@@ -39,9 +40,7 @@ x-node-common: &node-common
     ADV_FAKE_LEADER:          "true"
     ADV_COMMIT_SUPPRESS:      "true"
     ADV_FAKE_LEADER_INTERVAL: "10"
-  depends_on:
-    toxiproxy:
-      condition: service_started   # ← FIXED: was service_healthy
+
 
 # ---------------------------------------------------------------------------
 services:
@@ -76,8 +75,7 @@ services:
       - "6052:6052"
       - "6053:6053"
       - "6054:6054"
-    healthcheck:        # ← FIXED: disabled (scratch image has no shell)
-      disable: true
+
 
   # ── Node 1 ───────────────────────────────────────────────────────────────
   node1:
@@ -242,8 +240,6 @@ services:
     container_name: client
     hostname: client
     depends_on:
-      toxiproxy:
-        condition: service_started   # ← FIXED: was service_healthy
       node1:
         condition: service_started
       node2:
