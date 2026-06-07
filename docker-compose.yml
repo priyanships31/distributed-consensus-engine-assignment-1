@@ -1,0 +1,310 @@
+# =============================================================================
+#  docker-compose.yml
+#
+#  Services:  node1-node5 (honest) | node6 (adversary) | client | toxiproxy
+#  Volumes:   consensus-data (/data)  consensus-keys (/keys)
+#  Network:   cluster-net (bridge, 172.28.0.0/16)
+#
+#  Quick start:
+#    mkdir -p data keys
+#    docker compose up --build          # Mode B (PBFT)
+#    MODE=A docker compose up --build   # Mode A (Paxos)
+# =============================================================================
+
+# NOTE: 'version' field removed — obsolete in Docker Compose v2 / v5+
+
+# ---------------------------------------------------------------------------
+# YAML anchor — shared config for every node service
+# ---------------------------------------------------------------------------
+x-node-common: &node-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: runtime
+  restart: on-failure
+  networks:
+    - cluster-net
+  volumes:
+    - consensus-data:/data
+    - consensus-keys:/keys
+  environment:
+    MODE:                     "${MODE:-B}"
+    KEY_DIR:                  "/keys"
+    CLUSTER_HMAC_SECRET:      "iitj-ds-cluster-secret-change-in-prod"
+    PYTHONUNBUFFERED:         "1"
+    ADV_SUPPRESS_RATE:        "0.65"
+    ADV_EQUIVOCATE:           "true"
+    ADV_FORGE_SIG:            "true"
+    ADV_POISON_PAXOS:         "true"
+    ADV_FAKE_LEADER:          "true"
+    ADV_COMMIT_SUPPRESS:      "true"
+    ADV_FAKE_LEADER_INTERVAL: "10"
+  depends_on:
+    toxiproxy:
+      condition: service_started   # ← FIXED: was service_healthy
+
+# ---------------------------------------------------------------------------
+services:
+
+  # ── Toxiproxy — network fault injector ───────────────────────────────────
+  # Latest image from GitHub Container Registry (Docker Hub is deprecated)
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    container_name: toxiproxy
+    networks:
+      - cluster-net
+    ports:
+      - "8474:8474"   # REST management API
+      # Proxy listen ports: 6000 + src*10 + dst  (all directed node pairs)
+      - "6012:6012"
+      - "6013:6013"
+      - "6014:6014"
+      - "6015:6015"
+      - "6021:6021"
+      - "6023:6023"
+      - "6024:6024"
+      - "6025:6025"
+      - "6031:6031"
+      - "6032:6032"
+      - "6034:6034"
+      - "6035:6035"
+      - "6041:6041"
+      - "6042:6042"
+      - "6043:6043"
+      - "6045:6045"
+      - "6051:6051"
+      - "6052:6052"
+      - "6053:6053"
+      - "6054:6054"
+    healthcheck:        # ← FIXED: disabled (scratch image has no shell)
+      disable: true
+
+  # ── Node 1 ───────────────────────────────────────────────────────────────
+  node1:
+    <<: *node-common
+    container_name: node1
+    hostname: node1
+    command:
+      - python
+      - node.py
+      - "--id"
+      - "1"
+      - "--port"
+      - "5001"
+      - "--peers"
+      - "2@node2:5002,3@node3:5003,4@node4:5004,5@node5:5005"
+      - "--mode"
+      - "${MODE:-B}"
+    environment:
+      NODE_ID:   "1"
+      NODE_PORT: "5001"
+      MODE:      "${MODE:-B}"
+      PEERS:     "2@node2:5002,3@node3:5003,4@node4:5004,5@node5:5005"
+    ports:
+      - "5001:5001"
+      - "5101:5101"
+
+  # ── Node 2 ───────────────────────────────────────────────────────────────
+  node2:
+    <<: *node-common
+    container_name: node2
+    hostname: node2
+    command:
+      - python
+      - node.py
+      - "--id"
+      - "2"
+      - "--port"
+      - "5002"
+      - "--peers"
+      - "1@node1:5001,3@node3:5003,4@node4:5004,5@node5:5005"
+      - "--mode"
+      - "${MODE:-B}"
+    environment:
+      NODE_ID:   "2"
+      NODE_PORT: "5002"
+      MODE:      "${MODE:-B}"
+      PEERS:     "1@node1:5001,3@node3:5003,4@node4:5004,5@node5:5005"
+    ports:
+      - "5002:5002"
+      - "5102:5102"
+
+  # ── Node 3 ───────────────────────────────────────────────────────────────
+  node3:
+    <<: *node-common
+    container_name: node3
+    hostname: node3
+    command:
+      - python
+      - node.py
+      - "--id"
+      - "3"
+      - "--port"
+      - "5003"
+      - "--peers"
+      - "1@node1:5001,2@node2:5002,4@node4:5004,5@node5:5005"
+      - "--mode"
+      - "${MODE:-B}"
+    environment:
+      NODE_ID:   "3"
+      NODE_PORT: "5003"
+      MODE:      "${MODE:-B}"
+      PEERS:     "1@node1:5001,2@node2:5002,4@node4:5004,5@node5:5005"
+    ports:
+      - "5003:5003"
+      - "5103:5103"
+
+  # ── Node 4 ───────────────────────────────────────────────────────────────
+  node4:
+    <<: *node-common
+    container_name: node4
+    hostname: node4
+    command:
+      - python
+      - node.py
+      - "--id"
+      - "4"
+      - "--port"
+      - "5004"
+      - "--peers"
+      - "1@node1:5001,2@node2:5002,3@node3:5003,5@node5:5005"
+      - "--mode"
+      - "${MODE:-B}"
+    environment:
+      NODE_ID:   "4"
+      NODE_PORT: "5004"
+      MODE:      "${MODE:-B}"
+      PEERS:     "1@node1:5001,2@node2:5002,3@node3:5003,5@node5:5005"
+    ports:
+      - "5004:5004"
+      - "5104:5104"
+
+  # ── Node 5 ───────────────────────────────────────────────────────────────
+  node5:
+    <<: *node-common
+    container_name: node5
+    hostname: node5
+    command:
+      - python
+      - node.py
+      - "--id"
+      - "5"
+      - "--port"
+      - "5005"
+      - "--peers"
+      - "1@node1:5001,2@node2:5002,3@node3:5003,4@node4:5004"
+      - "--mode"
+      - "${MODE:-B}"
+    environment:
+      NODE_ID:   "5"
+      NODE_PORT: "5005"
+      MODE:      "${MODE:-B}"
+      PEERS:     "1@node1:5001,2@node2:5002,3@node3:5003,4@node4:5004"
+    ports:
+      - "5005:5005"
+      - "5105:5105"
+
+  # ── Node 6 — Byzantine adversary ─────────────────────────────────────────
+  node6:
+    <<: *node-common
+    container_name: node6
+    hostname: node6
+    command:
+      - python
+      - adversary.py
+      - "--id"
+      - "6"
+      - "--port"
+      - "5006"
+      - "--peers"
+      - "1@node1:5001,2@node2:5002,3@node3:5003,4@node4:5004,5@node5:5005"
+      - "--mode"
+      - "${MODE:-B}"
+    environment:
+      NODE_ID:                  "6"
+      NODE_PORT:                "5006"
+      MODE:                     "${MODE:-B}"
+      PEERS:                    "1@node1:5001,2@node2:5002,3@node3:5003,4@node4:5004,5@node5:5005"
+      ADV_SUPPRESS_RATE:        "0.65"
+      ADV_EQUIVOCATE:           "true"
+      ADV_FORGE_SIG:            "true"
+      ADV_POISON_PAXOS:         "true"
+      ADV_FAKE_LEADER:          "true"
+      ADV_COMMIT_SUPPRESS:      "true"
+      ADV_FAKE_LEADER_INTERVAL: "10"
+    ports:
+      - "5006:5006"
+      - "5106:5106"
+
+  # ── Client — concurrent transaction generator ─────────────────────────────
+  client:
+    <<: *node-common
+    container_name: client
+    hostname: client
+    depends_on:
+      toxiproxy:
+        condition: service_started   # ← FIXED: was service_healthy
+      node1:
+        condition: service_started
+      node2:
+        condition: service_started
+      node3:
+        condition: service_started
+      node4:
+        condition: service_started
+      node5:
+        condition: service_started
+    command:
+      - python
+      - client.py
+      - "--nodes"
+      - "1@node1:5001,2@node2:5002,3@node3:5003,4@node4:5004,5@node5:5005"
+      - "--mode"
+      - "${MODE:-B}"
+      - "--txns"
+      - "100"
+      - "--concurrency"
+      - "5"
+      - "--rate"
+      - "2.0"
+      - "--retries"
+      - "6"
+      - "--wait"
+      - "12"
+    environment:
+      MODE:        "${MODE:-B}"
+      NODES:       "1@node1:5001,2@node2:5002,3@node3:5003,4@node4:5004,5@node5:5005"
+      NUM_TXNS:    "100"
+      CONCURRENCY: "5"
+      RATE:        "2.0"
+      MAX_RETRIES: "6"
+    volumes:
+      - consensus-data:/data
+      - consensus-keys:/keys
+
+# ---------------------------------------------------------------------------
+# Volumes — bind-mounted so host can inspect files without docker exec
+# ---------------------------------------------------------------------------
+volumes:
+  consensus-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "${PWD}/data"
+  consensus-keys:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "${PWD}/keys"
+
+# ---------------------------------------------------------------------------
+# Network
+# ---------------------------------------------------------------------------
+networks:
+  cluster-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

@@ -1,0 +1,22 @@
+# =============================================================================
+#  requirements.txt
+#  IIT Jodhpur | Fundamentals of Distributed Systems | Assignment-1
+#
+#  Python 3.14 compatible.
+#  grpcio  — EXCLUDED: broken on Python 3.14 (removed private CPython C APIs)
+#  uvloop  — EXCLUDED: no Python 3.14 wheel available yet
+#  All networking uses asyncio (stdlib).
+#
+#  Install:
+#    pip install --only-binary=:all: -r requirements.txt
+# =============================================================================
+
+# RSA-PSS signing, key serialisation, HMAC
+cryptography>=42.0.8
+
+# HTTP — used by client leader-discovery probe and chaos test helpers
+requests>=2.32.3
+
+# Testing
+pytest>=8.2.2
+pytest-asyncio>=0.23.7
