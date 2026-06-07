@@ -1,7 +1,3 @@
-# Data and keys (runtime generated)
-data/
-keys/
-
 # Python
 __pycache__/
 *.py[cod]
